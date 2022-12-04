@@ -1,0 +1,319 @@
+	.TITLE	OPC80	8080 OP CODE PROCESSOR
+	.ENABL LC
+
+	.PSECT OPC80
+
+	.MACRO GENCAL NAME
+	.MACRO NAME
+	CALL	NAME
+	.ENDM NAME
+	.ENDM GENCAL
+
+	GENCAL STCODE
+	GENCAL SETIMM
+	GENCAL SAVREG
+	GENCAL GETSYM
+	GENCAL SETSYM
+	GENCAL TSTARG
+	GENCAL GLBEXP
+	GENCAL ABSEXP
+	GENCAL RELEXP
+	GENCAL GETNB
+	GENCAL SETNB
+	GENCAL ZAPCPX
+
+REGFLG	=001			;REGISTER TYPE
+DEFFLG	=010			;DEFINED
+RELFLG	=040			;RELOCATABLE
+GLBFLG	=100			;GLOBAL
+CPXFLG	=200			;COMPLEX EXPRESSION FLAG
+PS1FLG	=200			;UNDEFINED
+
+	.macro am symbol
+am.'symbol = ...now
+...now = ...now+...now
+	.endm
+
+...now=1		; default (0) is no operands, just mnemonic.
+	am sss		; source <B,C,D,E,H,L,M,A> in bits 0-2
+	am ddd		; dest <B,C,D,E,H,L,M,A> in bits 3-5
+	am ssp		; source is <BC,DE,HL,SP> in bits 4-5. (OR into 3-5)
+	am dsp		; dest is <BC,DE,HL,SP> in bits 4-5.  (OR into 3-5)
+	am ssw		; source is <BC,DE,HL,PSW> in bits 4-5. (OR into 3-5)
+	am dsw		; dest is <BC,DE,HL,PSW> in bits 4-5.  (OR into 3-5)
+	am sat		; source indirect thru <BC,DE> in bit 4.  (OR into 3-5)
+	am dat		; dest indirect thru <BC,DE> in bit 4.  (OR into 3-5)
+	am adr		; two byte address follows opcode
+	am i.b		; immediate mode, byte value
+	am i.w		; immediate mode, word value
+	am rst		; reset is a special case.  0-7 goes in bits 3-5.
+	am n80		; this opcode is in 8085, but not 8080.
+am.reg = am.adr-1			; these bits are all REGISTER
+am.dst = am.ddd!am.dsp!am.dsw!am.dat	; these bits are destinations, writes
+am.src = ^Cam.dst			; these bits are sources, reads
+desflg = 100000				; destructive to operand (for CREF)
+		; class is really defined by addressing modes.
+		; register classes:	(high byte of value: low byte is 0:7)
+	RC.... = 0.	; for filling in table entries
+	RC.STD = 256.	; standard registers, <B,C,D,E,H,L,M,A>
+	RC.IND = 512.	; indirect register pairs <BC,DE>
+	RC.DPS = 1024.	; double reg pairs for std ops <BC,DE,HL,SP>
+	RC.STK = 2048.	; double reg pairs for stack ops <BC,DE,HL,PSW>
+
+	.MACRO	XOR	S,D
+	MOV	S,-(6)
+	BIC	D,(6)
+	BIC	S,D
+	BIS	(6)+,D
+	.ENDM	XOR
+
+	.MACRO	PUSH ARG
+	MOV	ARG,-(SP)
+	.ENDM
+
+	.MACRO	PULL ARG
+	MOV	(SP)+,ARG
+	.ENDM
+
+	.macro	movn w,s,d
+	mov	r0,-(sp)
+	mov	r1,-(sp)
+	mov	#s,r0
+	mov	#d,r1
+.rept w
+	mov	(r0)+,(r1)+
+.endr
+	mov	(sp)+,r1
+	mov	(sp)+,r0
+	.endm
+
+	.MACRO	ERROR CHR
+	BIS	#ERR.'CHR,ERRBTS
+	.ENDM
+
+ERRI=1
+	.IRPC	X,< ABDEILMNOPQRTUZ>
+ERR.'X=ERRI
+ERRI=ERRI+ERRI
+	.ENDR
+
+	.SBTTL	Process Opcode
+
+	.globl	chrpnt
+
+opcval:	.blkb	1		; opcode value
+chrflg:	.blkb	1		; bits for special characters seen
+				; also high byte of opcode "value"
+opcmap:	.blkw	1		; address mode
+
+chr.at = 1		; @, signifying indirection (deferred mode)
+chr.lb = 2		; #, signifying immediate mode
+chr.m1 = 4		; leading minus sign, signifying autodecrement
+chr.m2 = 10		; another one, signifying more of the same
+chr.op = 20		; open parenthesis, "(", signifying indexed or deferred
+chr.cl = 40		; close parenthesis, ")", to keep a happy syntax
+chr.p1 = 100		; trailing plus sign, signifying autoincrement
+chr.p2 = 200		; another one, signifying more of the same
+
+cpxpnt:	.blkw	1		; chrpnt gets saved here for predictive parsing
+savpnt:	.blkw	1		; if this is non-blank, WE FOUND A COMPLEX.
+
+immtbl:				; word/address data for immediate usage
+immsym:	.blkw	2		; symbol name
+immflg:	.blkw	1		; flag word
+immval:	.blkw	1		; value
+
+
+OPCODE::
+	MOV	#77776,PCRCNT	;LIST LOCATION OF FIRST BYTE ONLY
+	MOVB	R1,opcval	;get a copy of the base opcode for building
+	mov	value,opcmap	;GET A COPY OF THE opcode's flag word
+	tst	(sp)+		; and fix the stack cuz its broke
+
+				;now we check the argument list
+
+	bit	#am.n80,opcmap	; Is this instruction available on 8080 & 8085?
+	beq	20$		; yes, continue with operands
+	bit	#ed.m85,edmask	; do we care?
+	beq	10$		; no, but fix it anyway
+	error	z		; who cares whether they enabled it or not?
+10$:	bic	#am.n80,opcmap	; we no longer care
+
+20$:	clr	savpnt		; state that we haven't seen a complex yet
+	clr	immsym		; start out assuming absolute zero
+	clr	immsym+2	;	(in cases where more data is needed)
+	clr	immflg		;
+	clr	immval		;
+
+	bit	#ed.s2d,edmask	; is this backwards, or standard?
+	beq	30$		; backwards;  do the other way
+				; (bit clear means ENABLED)
+
+	call	dest		; check this out
+	call	source		; try for source reg
+	br	40$		; pick up with common code
+
+30$:	call	source		; try for source reg
+	call	dest		; check this out
+
+40$:				; post process fudging
+	mov	opcmap,r0	; see if M,M was possible
+	bic	#^C<am.sss!am.ddd>,r0	; and only M,M
+	cmp	#am.sss!am.ddd,r0	; was it?
+	bne	50$		; no, don't worry about it
+	movb	opcval,r0	; get the modified opcode out
+	bic	#^C77,r0	; mask all but source and dest
+	cmpb	#66,r0		; were they M,M?
+	bne	50$		; no, forget it, willya?
+	error	a		; finally!  Is that all you wanted?
+
+50$:				; NOW we can output the code.
+	clr	value		; value must have high byte clear
+	movb	opcval,value	; output opcode first
+	clr	flags		; so it is absolute
+	inc	bytmod		; as a byte
+	SETIMM			;CONVERT TO OBJECT FORMAT
+	STCODE			;INSERT INTO CODROL
+
+	bit	#am.adr!am.i.b!am.i.w,opcmap	; is there more to it?
+	beq	cpopj		; no, quit
+
+	push	chrpnt		; stash existing pointer for restore
+	zapcpx			; just to make sure
+	tst	savpnt		; did we have anything, or maybe err out?
+	beq	70$		; no, error occurred; don't wipe out pointer
+	mov	savpnt,chrpnt	; reset to the complex pointer
+	setnb			; prepare parser
+	glbexp			; re-evaluate expression (set up cpxrol)
+70$:	bit	#am.adr!am.i.w,opcmap	; is this a word value
+	beq	80$		; no, leave byte mode set
+	clr	bytmod		; this IS a word value, use a word
+80$:	setimm			; convert to object format
+	stcode			; insert into codrol
+	pull	chrpnt		; restore the pointer to eol, in any case
+	setnb			; make sure parser knows we finished
+cpopj::				; a do-nothing routine for switch handling
+	return			; believe it or not, that's it.
+
+
+source:	clrb	crfdfl+1	; sources are not destroyed
+	push	opcmap		; save copy for later
+	bic	#am.dst,opcmap	; only do source argument
+	call	oprand		; fudge in the register, find the immediate
+	pull	opcmap		; get the old value back
+	inc	expflg		; commas between arguments from now on
+	return
+
+dest:	bis	#desflg,crfdfl	; set killer flag
+	push	opcmap		; save value for later use
+	bic	#am.src,opcmap	; do not do sources (only destinations)
+	call	oprand		; process the operand
+	pull	opcmap		; get the old value back
+	inc	expflg		; commas between arguments from now on
+	return
+
+	.SBTTL	operand processors
+
+oprand:	tst	opcmap		; should there be an argument?
+	bne	10$		; yes, see if there is one
+	return			; otherwize ferget it
+10$:	tstarg			; is there an exp?
+	beq	erra		; expression required and not present.
+
+				; an expression is present.  It may be anything
+	clrb	chrflg		; we have seen no magic characters (yet)
+
+;	cmpb	#'#,r5		; immediate mode?
+;	beq	20$		; no, keep trying
+;	bisb	#chr.lb,chrflg	; say we saw it
+;	getnb			; and skip it
+;	br	70$		; only one mode to a customer
+
+70$:	mov	chrpnt,cpxpnt	; save "here" in case here starts a complex
+	glbexp			; what is the expression?
+	clc			; assume register specified (NO carry=reg used)
+	bitb	#regflg,mode	; did he specify a register?
+	bne	75$		; yes, guessed right
+	sec			; if at first you don't succeed, fry, fry again
+	br	80$		; continue with checks
+75$:	cmpb	#regflg!defflg,mode	; this is the only real register type
+	beq	79$		; no, it is really a register (absolutely)
+	error	r		; there aint no such thing as a relocatable reg
+79$:	sez			; BNE is how we got here, BNE is how we leave
+80$:	bit	#am.reg,opcmap	; should a register have been used?
+	BHI	regexp		; carry and zero are both off 
+				;	(reg s/b used and was)
+	bne	errr		; zero off, carry must be on, which is wrong
+				;	(reg needed and not used)
+	bcc	erra		; carry off, zero must be on, also wrong
+				;	(reg used and not allowed)
+	jmp	nonreg		; non register (imm or adr or rst)
+
+99$:	return			; no operand expected, don't process any
+
+
+regexp:				; made it thru reg/nonreg test--register
+	mov	#<255.-7.>,r1	; illegal bits in value
+	bit	#am.sss!am.ddd,opcmap	; are all seven values allowed?
+	beq	30$		; no, keep looking for legal class
+	bis	#rc.std,r1	; flag that std regs are expected
+	br	70$		; don't set illegal class bit
+
+30$:	bis	#1,r1		; from now on only even numbered regs allowed.
+	bit	#am.sat!am.dat,opcmap	; are we looking for indirect?
+	beq	40$		; no, keep looking
+	bis	#rc.ind!4,r1	; this bit must be clear, legal regs are 0 or 2
+	br	70$		; go check
+
+40$:	bit	#am.ssp!am.dsp,opcmap	; do we need double prec work regs?
+	beq	50$		; no, keep going
+	bis	#rc.dps,r1	; then this value bit must be clear
+	br	70$		; see if that is so
+
+50$:	bis	#rc.stk,r1	; the only other reg possibility is DP stack
+				; which uses this indicator
+
+70$:	bit	r1,value	; is this reg ok?
+	bne	errr		; no.  die.
+	movb	value,r0	; get reg value
+	bit	#am.sss,opcmap	; should this be shifted?
+	bne	80$		; no, use it as is
+	asl	r0		; all but am.sss are stored into bits 3-5
+	asl	r0
+	asl	r0
+80$:	bis	r0,opcval	; combine the reg with the opcode
+99$:	return
+
+			; error exits
+erra:	error	a		; address/expression mode error
+	return
+
+errr:	error	r		; register error (wrong or no value or type)
+	return
+
+nonreg:				; made it thru reg/nonreg test--non register
+	bit	#am.rst,opcmap	; is this a reset instruction?
+	bne	op.rst		; yes, process it
+
+	mov	cpxpnt,savpnt	; say that we have found a complex (for later)
+	movn	4,symbol,immtbl	; save the data for later output
+	return
+
+
+
+op.rst:		; reset is a special case.  0-7 goes in bits 3-5.
+				; the expression has already been fetched
+	bitb	#^Cdefflg,mode	; was it wierd?
+	bne	15$		; yes, nfg.
+	mov	value,r0	; what's it worth?
+	bit	#-8.,r0		; is it legit?
+	beq	20$		; yes, leave it alone
+15$:	clr	r0		; no, assume 0
+	error	a		; and barf
+20$:	rol	r0		; move the value into the right place
+	rol	r0
+	rol	r0
+	bisb	r0,opcval	; and or it into the opcode
+99$:	return
+
+	.END

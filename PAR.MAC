@@ -1,0 +1,46 @@
+;.IIF NDF MCEXEC,.NLIST
+	.LIST
+	.sbttl	Define global conditional parameters
+
+;+
+; PAR
+; Parameter file for operating system and generic MACXX options, unrelated
+; to which assembler this is.  This file precedes the assembler-specific
+; parameter file, and the combination specifies the options for this assembly.
+;-
+
+	MAC8K=0			;PARAMETER FILE: ASSEMBLE THE FULL VERSION
+	EXTR.BUKETS=0		;NOT NECESSARY
+
+WARNING=2
+USERRB=53
+STK$AD=1000
+FATAL=10
+SUCC=1
+	
+ILVL=	1			;SET INDIRECT COMMAND FILE LEVEL TO 1
+ 
+R$$11M=	0			;RUN ON RSX-11M SYSTEM
+RT11=	0			;USE RT-11 I/O OPTIONS
+DOS=	0
+XBAW=	0
+
+VAX$ =	0			;.NE. IF TO RUN ON VAX
+EIS$=	0			;.NE. IF EIS AVAILABLE
+.IIF NE,EIS$,PDPV45= 0		;DF IF HARDWARE MUL/DIV
+
+..mro = 1	; DEC macro
+..m11 = 2	; mac11
+..m65 = 10	; mac65
+..m65c = 20	; mac65c
+..m68 = 100	; mac68
+..m69 = 200	; mac69
+..m80 = 1000	; mac80
+..mz80 = 2000	; macz80
+			; combined cases (processor families)
+.pdp11 = 7	; for ..mro!..m11
+.6502 = 70	; for ..m65!..m65c
+.68XX = 700	; for ..m68!..m69
+.intel = 7000	; for ..m80!..mz80 (and co) (should Z80 be .zilog?)
+
+.IIF NDF MCEXEC,.LIST

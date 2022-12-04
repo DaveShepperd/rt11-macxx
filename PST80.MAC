@@ -1,0 +1,245 @@
+	.TITLE	PST80	8080 PERMANENT SYMBOL TABLE 12-Aug-83
+	.IDENT	/V0505/
+	.GLOBL	PSTBAS,	PSTTOP		;LIMITS
+	.GLOBL	WRDSYM		;POINTER TO .WORD
+	.GLOBL	BYTSYM		;POINTER TO .BYTE
+	.GLOBL	ASCTSY		;POINTER TO .ASECT
+	.GLOBL	DFLGEV,	DFLGBM,	DFLCND,	DFLMAC,	DFLSMC,	DFLEND
+
+DFLEND=	040			;.END DIRECTIVE
+DFLGEV=	020			;DIRECTIVE REQUIRES EVEN LOCATION
+DFLGBM=	010			;DIRECTIVE USES BYTE MODE
+DFLCND=	004			;CONDITIONAL DIRECTIVE
+DFLMAC=	002			;MACRO DIRECTIVE
+DFLSMC=	001			;MCALL
+
+	.IF DF	PAL11R		;PAL11R SUBSET
+XMACRO=	0
+X40=	0
+X45=	0
+	.ENDC
+
+	.IIF DF	XMACRO,	XSML=	0
+
+DES=100000			;DESTRUCTIVE TO OPERAND (FOR CREF)
+	.MACRO	OPCDEF	NAME,CLASS,VALUE,AM,FLAGS
+	.NCHR ...1,<NAME>
+	.RAD50 /NAME/
+	.IIF LE,...1-3,.WORD 0
+	.BYTE	VALUE
+	.BYTE	class+200	; was 200+OPCL'CLASS
+	.WORD	FLAGS+AM+0
+	.ENDM
+
+	.macro am symbol
+am.'symbol = ...now
+...now = ...now+...now
+	.endm
+
+...now=1		; default (0) is no operands, just mnemonic.
+	am sss		; source <B,C,D,E,H,L,M,A> in bits 0-2
+	am ddd		; dest <B,C,D,E,H,L,M,A> in bits 3-5
+	am ssp		; source is <BC,DE,HL,SP> in bits 4-5. (OR into 3-5)
+	am dsp		; dest is <BC,DE,HL,SP> in bits 4-5.  (OR into 3-5)
+	am ssw		; source is <BC,DE,HL,PSW> in bits 4-5. (OR into 3-5)
+	am dsw		; dest is <BC,DE,HL,PSW> in bits 4-5.  (OR into 3-5)
+	am sat		; source indirect thru <BC,DE> in bit 4.  (OR into 3-5)
+	am dat		; dest indirect thru <BC,DE> in bit 4.  (OR into 3-5)
+	am adr		; two byte address follows opcode
+	am i.b		; immediate mode, byte value
+	am i.w		; immediate mode, word value
+	am rst		; reset is a special case.  0-7 goes in bits 3-5.
+	am n80		; this opcode is in 8085, but not 8080.
+		; class is really defined by addressing modes.
+		; register classes:	(high byte of value: low byte is 0:7)
+	RC.... = 0.	; for filling in table entries
+	RC.STD = 256.	; standard registers, <B,C,D,E,H,L,M,A>
+	RC.IND = 512.	; indirect register pairs <BC,DE>
+	RC.DPS = 1024.	; double reg pairs for std ops <BC,DE,HL,SP>
+	RC.STK = 2048.	; double reg pairs for stack ops <BC,DE,HL,PSW>
+
+	.MACRO	DIRDEF	NAME,	FLAGS,	COND
+	.RAD50	/.'NAME/
+	.BYTE	FLAGS+0,	0
+	.IF NB	<COND>
+	.IF DF	COND
+	.GLOBL	OPCERR
+	.WORD	OPCERR
+	.MEXIT
+	.ENDC
+	.ENDC
+	.GLOBL	NAME
+	.WORD	NAME
+	.ENDM
+
+	.PSECT PST
+PSTBAS:				;BASE
+	OPCDEF	ACI,,316,am.i.b
+	OPCDEF	ADC,,210,am.sss
+	OPCDEF	ADD,,200,am.sss
+	OPCDEF	ADI,,306,am.i.b
+	OPCDEF	ANA,,240,am.sss
+	OPCDEF	ANI,,346,am.i.b
+	OPCDEF	CALL,,315,am.adr
+	OPCDEF	CC,,334,am.adr
+	OPCDEF	CM,,374,am.adr
+	OPCDEF	CMA,,57
+	OPCDEF	CMC,,77
+	OPCDEF	CMP,,270,am.sss
+	OPCDEF	CNC,,324,am.adr
+	OPCDEF	CNZ,,304,am.adr
+	OPCDEF	CP,,364,am.adr
+	OPCDEF	CPE,,354,am.adr
+	OPCDEF	CPI,,376,am.i.b
+	OPCDEF	CPO,,344,am.adr
+	OPCDEF	CZ,,314,am.adr
+	OPCDEF	DAA,,47
+	OPCDEF	DAD,,11,am.ssp
+	OPCDEF	DCX,,13,am.dsp
+	OPCDEF	DECR,,5,am.ddd
+	OPCDEF	DI,,363
+	OPCDEF	EI,,373
+	OPCDEF	HLT,,166
+	OPCDEF	IN,,333,am.i.b		; byte is port number
+	OPCDEF	INCR,,4,am.ddd
+	OPCDEF	INX,,3,am.dsp
+	OPCDEF	JC,,332,am.adr
+	OPCDEF	JM,,372,am.adr
+	OPCDEF	JMP,,303,am.adr
+	OPCDEF	JNC,,322,am.adr
+	OPCDEF	JNZ,,302,am.adr
+	OPCDEF	JP,,362,am.adr
+	OPCDEF	JPE,,352,am.adr
+	OPCDEF	JPO,,342,am.adr
+	OPCDEF	JZ,,312,am.adr
+	OPCDEF	LDA,,72,am.adr
+	OPCDEF	LDAX,,12,am.sat
+	OPCDEF	LHLD,,52,am.adr
+	OPCDEF	LXI,,1,am.i.w!am.dsp
+	OPCDEF	MOV,,100,am.sss!am.ddd	; make sure MOV M,M is disallowed
+	OPCDEF	MVI,,6,am.i.b!am.ddd
+	OPCDEF	NOP,,0
+	OPCDEF	ORA,,260,am.sss
+	OPCDEF	ORI,,366,am.i.b
+	OPCDEF	OUT,,323,am.i.b		; byte is really port number
+	OPCDEF	PCHL,,351
+	OPCDEF	POP,,301,am.dsw
+	OPCDEF	PUSH,,305,am.ssw
+	OPCDEF	RAL,,27
+	OPCDEF	RAR,,37
+	OPCDEF	RC,,330
+	OPCDEF	RET,,311
+	OPCDEF	RIM,,40,am.n80
+	OPCDEF	RLC,,7
+	OPCDEF	RM,,370
+	OPCDEF	RNC,,320
+	OPCDEF	RNZ,,300
+	OPCDEF	RP,,360
+	OPCDEF	RPE,,350
+	OPCDEF	RPO,,340
+	OPCDEF	RRC,,17
+	OPCDEF	RST,,307,am.rst		; rst<0:7> goes in bits 3-5
+	OPCDEF	RZ,,310
+	OPCDEF	SBB,,230,am.sss
+	OPCDEF	SBI,,336,am.i.b
+	OPCDEF	SHLD,,42,am.adr
+	OPCDEF	SIM,,60,am.n80
+	OPCDEF	SPHL,,371
+	OPCDEF	STA,,62,am.adr
+	OPCDEF	STAX,,2,am.dat
+	OPCDEF	STC,,67
+	OPCDEF	SUB,,220,am.sss
+	OPCDEF	SUI,,326,am.i.b
+	OPCDEF	XCHG,,353
+	OPCDEF	XRA,,250,am.sss
+	OPCDEF	XRI,,356,am.i.b
+	OPCDEF	XTHL,,343
+
+	DIRDEF	<ASCII>,	DFLGBM
+	DIRDEF	<ASCIN>,	DFLGBM
+	DIRDEF	<ASCIZ>,	DFLGBM
+ASCTSY:
+	DIRDEF	<ASECT>,	,	XREL
+	DIRDEF	<BLKB >
+	DIRDEF	<BLKW >,	DFLGEV
+	DIRDEF	<BSECT>,	,	XREL
+BYTSYM:	DIRDEF	<BYTE >,	DFLGBM
+	DIRDEF	<CKSUM>,	DFLGBM
+	DIRDEF	<COPY >
+	DIRDEF	<CROSS>
+	DIRDEF	<CSECT>,	,	XREL
+	DIRDEF	<DCREF>
+	DIRDEF	<DEFST>
+	.IF DF	YPHASE
+	DIRDEF	<DEPHA>
+	.ENDC
+	DIRDEF	<DSABL>
+	DIRDEF	<ECREF>
+	DIRDEF	<ENABL>
+	DIRDEF	<END  >,DFLCND!DFLMAC!DFLEND
+	DIRDEF	<ENDC >,	DFLCND
+	DIRDEF	<ENDM >,	DFLMAC,	XMACRO
+	DIRDEF	<ENDR >,	DFLMAC,	XMACRO
+	DIRDEF	<ERROR>
+	DIRDEF	<EVEN >
+	DIRDEF	<GETPO>
+	DIRDEF	<GLOBL>,	,	XREL
+	DIRDEF	<IDENT>
+	DIRDEF	<IF   >,	DFLCND
+	DIRDEF	<IFDF >,	DFLCND
+	DIRDEF	<IFEQ >,	DFLCND
+	DIRDEF	<IFF  >,	DFLCND
+	DIRDEF	<IFG  >,	DFLCND
+	DIRDEF	<IFGE >,	DFLCND
+	DIRDEF	<IFGT >,	DFLCND
+	DIRDEF	<IFL  >,	DFLCND
+	DIRDEF	<IFLE >,	DFLCND
+	DIRDEF	<IFLT >,	DFLCND
+	DIRDEF	<IFNDF>,	DFLCND
+	DIRDEF	<IFNE >,	DFLCND
+	DIRDEF	<IFNZ >,	DFLCND
+	DIRDEF	<IFT  >,	DFLCND
+	DIRDEF	<IFTF >,	DFLCND
+	DIRDEF	<IFZ  >,	DFLCND
+	DIRDEF	<IIF  >
+	DIRDEF	<INCLU>
+	DIRDEF	<IRP  >,	DFLMAC,	XMACRO
+	DIRDEF	<IRPC >,	DFLMAC,	XMACRO
+	DIRDEF	<LIMIT>,	DFLGEV,	XREL
+	DIRDEF	<LIST >
+	DIRDEF	<MACLI>
+	DIRDEF	<MACR >,	DFLMAC, XMACRO
+	DIRDEF	<MACRO>,	DFLMAC,	XMACRO
+	DIRDEF	<MCALL>,	DFLSMC,	XSML
+	DIRDEF	<MEXIT>	,	,	XMACRO
+	DIRDEF	<MPURG>,	,	XMACRO
+	DIRDEF	<NARG >	,	,	XMACRO
+	DIRDEF	<NCHR >	,	,	XMACRO
+	DIRDEF	<NLIST>
+	DIRDEF	<NOCRO>
+	DIRDEF	<ODD  >
+	DIRDEF	<PAGE >
+	.IF DF	YPHASE
+	DIRDEF	<PHASE>
+	.ENDC
+	DIRDEF	<POP  >
+	DIRDEF	<PRINT>
+	DIRDEF	<PSECT>
+	DIRDEF	<PUSH >
+	DIRDEF	<PUTPO>
+	DIRDEF	<RADIX>
+	DIRDEF	<RAD50>,	DFLGEV
+	DIRDEF	<REPT >,	DFLMAC,	XMACRO
+	DIRDEF	<REXIT>	,	,	XMACRO
+	DIRDEF	<SBTTL>
+	DIRDEF	<SYMBO>
+	DIRDEF	<TITLE>
+	DIRDEF	<VCTRS>
+	DIRDEF	<WARN >
+WRDSYM:
+	DIRDEF	<WORD >,	DFLGEV
+
+
+PSTTOP:				;TOP LIMIT
+
+	.END

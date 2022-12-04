@@ -1,0 +1,400 @@
+	.TITLE	MACZ80	Z80 macro x-assembler
+	MCEXEC = -1	; define it for listings
+.IIF NDF MCEXEC,.NLIST
+	.sbttl	Define MACZ80 conditional parameters
+
+;+
+; PARZ80
+; Parameter file for MACZ80 version of MACXX.  This file must
+; precede each MACXX module to select Z80 version options.
+;-
+
+.IIF NDF MCEXEC,.DSABL	CRF
+.ENABL	GBL,LC
+.NLIST	MEB,CND,BEX
+
+	
+XEDPIC=	0			;NO EN/DS PIC
+XFLTG=	0			;NO FLOATING POINT
+ 
+MACXX=	2000		;DEFINE ASSEMBLER TO BE MACZ80
+
+	.MACRO GTVNUM
+	.ASCII	/6.3/
+	.IIF NE,VAX$,.ASCII / (VAX)/
+	.BYTE 0
+	.ENDM
+
+	.MACRO .MACII
+	.ASCII /MACZ80/
+	.ENDM
+
+	.MACRO .MACQQ
+	.ASCII /?MACZ80/
+	.ENDM
+
+	.MACRO .MAC50
+	.RAD50 /MACZ80/
+	.ENDM
+
+	SMDEXT = ^RZ80		; default extension for system macros
+
+	.GLOBL	PCRCNT,CRFDFL,BYTMOD,ERRBTS,STCODE,CPOPJ
+	.GLOBL	SETIMM,ROLBAS,SAVREG,EXPFLG,GETSYM,SETSYM
+	.GLOBL	TSTARG,GLBEXP,ABSEXP,VALUE,RELEXP,MODE
+	.GLOBL	RELLVL,SECTOR,CLCLOC,CLCSEC,OPCODE
+	.GLOBL	GETNB,CHAN,WRNCNT,SMLSW
+	.GLOBL	SEARCH,NEXT	;ROLUPD,ROLPNT
+	.GLOBL	CHRPNT,ARGPNT,ARGCNT,EDMASK,ED.CRF
+
+; MACRO DEFINITION FOR 'PURE' P-SECT DECLARATIONS
+ 
+.MACRO	PURE	NAME  A1,A2,A3,A4,A5,A6
+	.PSECT	NAME	A1 A2 A3 A4 A5 A6
+.ENDM
+	.IIF NDF MCEXEC, .LIST
+
+	.sbttl	Z80-only symbolic bit assignments
+
+.macro	AM.	mne
+.iif nb,<mne>,	am.'mne = ...am.
+	...am. = ...am.+...am.
+	.endm	am.
+...am.=1
+				; syntax		value
+	AM. 8			; N, 8 bit #value	???
+	AM. 16			; NN, 16 bit #value	???
+
+	AM.		; value stored in low 3 bits from now on
+	AM. R			; 8 bit registers:
+				;	E		3
+				;	L		5
+	AM. RR			; 8(16?) bit registers:
+				;	B		0
+				;	D		2
+	AM. H			; H			4
+	AM. M			; M (8080 only)		6
+	AM. A			; A			7		
+; AM.C must have value 400(8) so they agree with AM$C
+	AM. C			; C			1
+	AM. BC			; BC (Z80 only)		0
+	AM. DE			; DE (Z80 only)		2
+	AM. HL			; HL			4
+	AM. SP			; SP			6
+; the preceding must agree with AM$ values or DEFER must be fixed
+	AM. IXY			; Index registers (instead of HL)
+				;	IX		0
+				;	IY		1
+	AM. I			; I (Z80 only)		0
+	AM. AF			; AF (Z80 only)		6
+	AM. PSW			; PSW (8080 only)	6
+
+	am.rrr	= am.r!am.rr!am.c!am.h		; BCDEHL
+	am.7	= am.rrr!am.a			; BCDEHL,A	no M or (HL)
+	am.adr	= am.16
+	am.$	= am.ixy-am.c			; bits common to am$
+
+.macro	AM$	mne
+	am$'mne = ...am$
+	...am$ = ...am$+...am$
+	.endm	am$
+...am$=1
+;This table must resemble the AM. table (or DEFER must be fixed)
+; for values C thru SP only.  AM.IXY must also be in the high byte.
+    				; syntax		value
+	AM$ C			; (C)   for in/out	?
+	AM$ BC			; (BC)			0
+	AM$ DE			; (DE)			2
+	AM$ HL			; (HL)			6 (not 4)
+	AM$ SP			; (SP)			???
+
+	AM$ 8			; (N)			???
+	AM$ 16			; (NN)			???
+
+
+
+.macro	AF$	mne
+	af$'mne = ...af$
+	...af$ = ...af$+...af$
+	.endm	af$
+...af$=4			; to account for low two bits being shift count
+
+	AF$ IXY			; "IX" or "IY" for "HL"
+				; "(IX+dd)" or "(IY+dd)" for "(HL)"
+				; "(IX)" or "(IY)" for "(HL)" on JP
+	AF$ DES			; destructive to operand
+	AF$ NOP			; base value not modified by value
+
+.MACRO	PRE.	MNE
+PRE.'MNE = ...PRE!200		; add in non-directive bit for comparisons
+...PRE = ...PRE+1
+	.ENDM	PRE.
+...PRE = 1
+
+	PRE. CB			; BIT TWIDDLING
+	PRE. BT			; Bit twiddling with bit number callout
+	PRE. ED			; ASSORTED EXTENSIONS
+; the next two are determined by the source code syntax and AM.IDX
+;	PRE. DD			; use IX instead of HL, (IX+d) instead of (HL)
+;	PRE. FD			; use IY instead of HL, (IY+d) instead of (HL)
+	PRE.XX = 3		; for masking the bits having to do with prefix
+		; NOTA BENE:  These values are anticipated (in order) in OPCZ80
+		;		at label PFX.XX.  Any changes to PRE.* values
+		;		must be echoed there.
+	.Z80 = 100		; legal for the z80
+	.8080 = 40		; legal for the 8080
+	.BOTH = 140		; what do you expect?
+	.WD = 20		; not sure whether or not this will be used
+; PREFIX BIT PATTERN:	7 === MUST BE SET! Indicates opcode (versus directive)
+;			6 === This syntax legal for Z80.
+;			5 === This syntax legal for 8080.
+;			4 === word mode (TRUE if 16 bit quantities)
+;			3
+;			2
+;			1 ==> prefix index
+;			0 _/
+
+.macro	FG. mne	; do bit assignments
+	fg.'mne = ...fg.
+...fg. = ...fg.+...fg.
+	.endm fg.
+...fg. = 1
+
+	FG. C.Z		; C or Z conditions
+	FG. CC		; other condition codes (sign and parity)
+;	FG. ..1		; two bytes are required for PRE.*
+;	FG. ..2		; (these 2)
+;fg.pre = fg...1!fg...2	; these two bits are used in PRE.*
+;	FG. OPT		; argument is optional
+	FG. RST		; reset is a special case
+	FG. IMN		; IM takes 0,1,or 2.
+	FG. REL		; relative branch address required
+;	FG. SPC		; WHAT IS THIS??  operator intervention required.
+
+	FG.CCC = FG.C.Z!FG.CC	; all condition codes
+
+.sbttl	debugging macros
+
+	.macro	say text,nocrlf
+	mov r0,-(sp)
+	.save
+	.psect	.what.
+.even
+...say = .
+	.ascii \text\
+	.iif nb, nocrlf, .byte 128.
+	.iif b, nocrlf, .byte 0.
+	.restore
+	.mcall .print
+	.print #...say
+	mov (sp)+,r0
+	.endm say
+
+	.macro octal number,nocrlf
+	mov r0,-(sp)
+	.mcall .ttyout
+	mov number,-(sp)
+.irp x,<15.,12.,9.,6,3,0>
+	mov (sp),r0
+	.rept x
+	clc		; so msb is 0 or 1
+	ror r0
+	.endr
+	bic #-8.,r0
+	bis #48.,r0
+	.ttyout	
+.endr
+.if b, nocrlf
+	mov #13.,r0
+	.ttyout
+	mov #10.,r0
+	.ttyout
+.endc
+	tst (sp)+
+	mov (sp)+,r0
+	.endm octal
+
+	.macro octalb number,nocrlf
+	mov r0,-(sp)
+	.mcall .ttyout
+	mov number,-(sp)
+.irp x,<6,3,0>
+	mov (sp),r0
+	bic #-256.,r0
+	.rept x
+	ror r0
+	.endr
+	bic #-8.,r0
+	bis #48.,r0
+	.ttyout	
+.endr
+.if b, nocrlf
+	mov #13.,r0
+	.ttyout
+	mov #10.,r0
+	.ttyout
+.endc
+	tst (sp)+
+	mov (sp)+,r0
+	.endm octalb
+
+	.macro hex number,nocrlf
+	mov r0,-(sp)
+	.mcall .ttyout
+	mov number,-(sp)
+.irp x,<12.,8.,4.,0>
+	mov (sp),r0
+	.rept x
+	ror r0
+	.endr
+	bic #-16.,r0
+	add #48.,r0
+	cmp r0,#58.
+...hex = .
+	blt <...hex+6.>	; to .ttyout
+	add #7,r0
+	.ttyout	
+.endr
+.if b, nocrlf
+	mov #13.,r0
+	.ttyout
+	mov #10.,r0
+	.ttyout
+.endc
+	tst (sp)+
+	mov (sp)+,r0
+	.endm hex
+
+	.macro hexb number,nocrlf
+	mov r0,-(sp)
+	.mcall .ttyout
+	movb number,-(sp)
+.irp x,<4.,0>
+	mov (sp),r0
+	.rept x
+	ror r0
+	.endr
+	bic #-16.,r0
+	add #48.,r0
+	cmp r0,#58.
+...hex = .
+	blt <...hex+6.>	; to .ttyout
+	add #7,r0
+	.ttyout	
+.endr
+.if b, nocrlf
+	mov #13.,r0
+	.ttyout
+	mov #10.,r0
+	.ttyout
+.endc
+	tst (sp)+
+	mov (sp)+,r0
+	.endm hexb
+
+.macro	show what
+	say <	what=	>,+
+	hex what
+	.endm show
+
+.macro	showb what
+	say <	what=	>,+
+	hexb what
+	.endm showb
+
+.sbttl	utility macros
+
+.macro	XDIGIT
+	.DSABL CRF
+		...1 = 0
+		.IRPC X,<0123456789ABCDEF>
+			.IRPC Y,<0123456789ABCDEF>
+				$'X''Y' = ...1
+				...1 = ...1 + 1
+			.ENDR
+		.ENDR
+	.ENABL CRF
+	.endm	xdigit
+
+.macro	.WB cond,false
+		.macro	j'cond	target
+		b'false	.+6	; branch around jump
+		jmp	target	; ratzenfratzen
+		.endm	j'cond
+
+		.macro	.b'cond	target
+		b'false	.+6	; branch around jump
+		jmp	target	; ratzenfratzen
+		.endm	.b'cond
+	.endm	.wb
+
+	.WB cc,cs
+	.WB cs,cc
+	.WB eq,ne
+	.WB ge,lt
+	.WB gt,le
+	.WB hi,los
+	.WB his,lo
+	.WB le,gt
+	.WB lo,his
+	.WB los,hi
+	.WB lt,ge
+	.WB mi,pl
+	.WB ne,eq
+	.WB pl,mi
+	.WB vc,vs
+	.WB vs,vc
+
+.macro	.WB
+	.endm .WB
+
+.macro kill what
+	.macro what a1,a2,a3,a4,a5,a6,a7,a8
+	.endm what
+	.endm kill
+
+.macro orkin
+	kill hex
+	kill hexb
+	kill octal
+	kill octalb
+	kill say
+	kill show
+	kill showb
+	kill orkin
+	.endm orkin
+
+.macro	dump label
+	say	<label':	>,+
+	hex	errbts
+	.endm	dump
+
+	.globl pass
+
+.macro	p2only	name, name2, a1, a2, a3, a4, a5, a6, a7, a8
+	.macro	name2 a1 a2 a3 a4 a5 a6 a7 a8 ?label
+	tst	pass
+	beq	label
+	name <a1> a2 a3 a4 a5 a6 a7 a8
+label:
+	.endm	name2
+	.endm	p2only
+
+p2only	say	say2	text,nocrlf
+p2only	hex	hex2	number,nocrlf
+p2only	hexb	hexb2	number,nocrlf
+p2only	octal	oct2	number,nocrlf
+p2only	octalb	octb2	number,nocrlf
+p2only	show	show2	what
+p2only	showb	showb2	what
+
+p2only	dump	dump2	where
+
+	kill	p2only		; not needed anymore
+
+.macro	orkin2
+	orkin
+	kill	dump
+	kill	orkin2
+	.endm	orkin2
+

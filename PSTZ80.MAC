@@ -1,0 +1,490 @@
+	.TITLE	PSTZ80	Z80 PERMANENT SYMBOL TABLE 19-Aug-83
+	.SBTTL	PERMANENT SYMBOL TABLE
+	.IDENT	/V0505/
+	.GLOBL	PSTBAS,	PSTTOP		;LIMITS
+	.GLOBL	DIRBAS,	DIRTOP		;more limits
+	.GLOBL	WRDSYM		;POINTER TO .WORD
+	.GLOBL	BYTSYM		;POINTER TO .BYTE
+	.GLOBL	ASCTSY		;POINTER TO .ASECT
+	.GLOBL	DFLGEV,	DFLGBM,	DFLCND,	DFLMAC,	DFLSMC,	DFLEND
+
+DFLEND=	040			;.END DIRECTIVE
+DFLGEV=	020			;DIRECTIVE REQUIRES EVEN LOCATION
+DFLGBM=	010			;DIRECTIVE USES BYTE MODE
+DFLCND=	004			;CONDITIONAL DIRECTIVE
+DFLMAC=	002			;MACRO DIRECTIVE
+DFLSMC=	001			;MCALL
+
+	.IF DF	PAL11R		;PAL11R SUBSET
+XMACRO=	0
+X40=	0
+X45=	0
+	.ENDC
+
+	.IIF DF	XMACRO,	XSML=	0
+
+DES=100000			;DESTRUCTIVE TO OPERAND (FOR CREF)
+
+.macro	trend	exp
+	.iif gt,<exp>,	...tnd=1
+	.iif lt,<exp>,	...tnd=-1
+	.endm	trend
+
+.MACRO	OPCDEF	NAM1,NAM2,  Opbyte=NFG, FGS=0, prefix=0
+.if ne, ...nm1		; on all but first time
+.if ne, <<...wd4!...wd6>&<AM.16!AM.BC!AM.DE!AM.HL!AM.SP!AM.IXY!AM.AF!AM.PSW>>
+	...wd2=...wd2!<.WD*400>		; indicate word mode
+.endc
+	.word	...wd0,...wd1,...wd2,...wd3
+	.word	...wd4,...wd5,...wd6,...wd7
+.endc			; former one has been output
+
+	...a1 = ^R'nam1'    		; save the name (for now and later)
+	...a2 = ^R'nam2'     		; both parts
+	...nth = ...nth + 1		; assume this is an alternate case
+	...tnd = 0			; assume the 2 mnemonics are equal
+	trend	<<...a2&377>-<...nm2&377>>
+	trend	<<<...a2/400>&377>-<<...nm2/400>&377>>
+	trend	<<...a1&377>-<...nm1&377>>
+	trend	<<<...a1/400>&377>-<<...nm1/400>&377>>
+	.iif ne, ...tnd,  ...nth=0	; different mnemonic
+	.iif lt, ...tnd, .error ...tnd ;'nam1''nam2' out of order
+	...nm1 = ...a1
+	...nm2 = ...a2
+
+	...wd0 = ...nm1
+	...wd1 = ...nm2+...nth
+	...wd2 = <prefix+0!200>*400+opbyte
+.iif eq, ...wd2&.8080,  ...wd2= <.8080 & ^C...wd2> ! <...wd2 & ^C.8080>
+	...wd3 = fgs
+	...wd4 = 0		; assume no DST macro will be seen
+	...wd5 = 0
+	...wd6 = 0		; assume no SRC macro will be seen
+	...wd7 = 0
+	.ENDM	OPCDEF
+	...nm1 = 0	; set up initial values (so that first is a new name)
+	...nm2 = 0
+	...nth = 0
+
+
+.MACRO	DST	dst.am=0, dst$am=0, dstmod=0
+.iif ne,dst$am&<am$8!am$16>, .iif ne,dst$am&^C<am$8!am$16>, .error ;DEFER will fuck up;
+	...wd4 = dst.am+DES	; DESTINATION INFO (normally destructive)
+	...wd5 = dstmod*400+dst$am
+	.endm	dst
+
+
+.MACRO	SRC	src.am=0, src$am=0, srcmod=0
+.iif ne,src$am&<am$8!am$16>, .iif ne,src$am&^C<am$8!am$16>, .error ;DEFER will fuck up;
+	...wd6 = src.am
+	...wd7 = srcmod*400+src$am
+	.endm	src
+
+
+
+.MACRO	DIRDEF	NAME,	FLAGS,	COND
+	.RAD50	/.'NAME/
+	.BYTE	FLAGS+0,	0
+	.IF NB	<COND>
+	.IF DF	COND
+	.GLOBL	OPCERR
+	.WORD	OPCERR
+	.MEXIT
+	.ENDC
+	.ENDC
+	.GLOBL	NAME
+	.WORD	NAME
+	.ENDM	DIRDEF
+
+	XDIGIT				; define hex constants ($xx)
+
+	.SBTTL	OPCODES
+	.PSECT PST
+PSTBAS:				;BASE
+	OPCDEF	ACI,	,$CE,		PREFIX=.8080
+			SRC	am.8,,af$nop
+	OPCDEF	ADC,	,$4A,		PREFIX=PRE.ED
+			DST	am.a,,af$nop
+			SRC	am.bc!am.de!am.hl!am.sp
+	OPCDEF	ADC,	,$88
+			DST	am.a,,af$nop
+			SRC	am.7!am.8, am$hl, af$ixy
+	OPCDEF	ADC,	,$88,		PREFIX=.8080
+			SRC	am.7!am.m
+	OPCDEF	ADD,	,$09
+			DST	am.hl,,af$ixy!af$nop
+			SRC	am.bc!am.de!am.hl!am.sp,,af$ixy
+; add HL HL or variants (add IX, IX add IY, IY) have to all have the same pfx
+	OPCDEF	ADD,	,$80
+			DST	am.a,,af$nop
+			SRC	am.7!am.8, am$hl, af$ixy
+	OPCDEF	ADD,	,$80,		PREFIX=.8080
+			SRC	am.7!am.m
+	OPCDEF	ADI,	,$C6,		PREFIX=.8080
+			SRC	am.8,,af$nop
+	OPCDEF	ANA,	,$A0,		PREFIX=.8080
+			SRC	am.7!am.m
+	OPCDEF	AND,	,$A0
+			SRC	am.7!am.8,am$hl,af$ixy
+	OPCDEF	ANI,	,$E6,		PREFIX=.8080
+			SRC	am.8,,af$nop
+	OPCDEF	BIT,	,$40,		PREFIX=PRE.BT
+			SRC	am.7,am$hl,af$ixy
+	OPCDEF	CAL,L	,$C4,FG.CCC
+			SRC	am.adr
+	OPCDEF	CAL,L	,$CD,		PREFIX=.8080!.Z80
+			SRC	am.adr
+	OPCDEF	CC ,	,$DC,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	CCF,	,$3F
+	OPCDEF	CM ,	,$FC,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	CMA,	,$2F,		PREFIX=.8080
+	OPCDEF	CMC,	,$3F,		PREFIX=.8080
+	OPCDEF	CMP,	,$B8,		PREFIX=.8080
+			SRC	am.7!am.m
+	OPCDEF	CNC,	,$D4,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	CNZ,	,$C4,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	CP ,	,$B8
+			SRC	am.7!am.8,am$hl,af$ixy
+	OPCDEF	CP ,	,$F4,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	CPD,	,$A9,		PREFIX=PRE.ED
+	OPCDEF	CPD,R	,$B9,		PREFIX=PRE.ED
+	OPCDEF	CPE,	,$EC,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	CPI,	,$A1,		PREFIX=PRE.ED
+	OPCDEF	CPI,	,$FE,		PREFIX=.8080
+			SRC	am.8,,af$nop
+	OPCDEF	CPI,R	,$B1,		PREFIX=PRE.ED
+	OPCDEF	CPL,	,$2F
+	OPCDEF	CPO,	,$E4,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	CZ ,	,$CC,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	DAA,	,$27,		PREFIX=.8080!.Z80
+	OPCDEF	DAD,	,$09,		PREFIX=.8080
+			SRC	am.rr!am.h!am.sp
+	OPCDEF	DCR,	,$05,		PREFIX=.8080
+			DST	am.7!am.m,,3
+	OPCDEF	DCX,	,$0B,		PREFIX=.8080
+			DST	am.rr!am.h!am.sp,,3
+	OPCDEF	DEC,	,$05
+			DST	am.7,am$HL,af$ixy!3
+	OPCDEF	DEC,	,$0B
+			DST	am.bc!am.de!am.hl!am.sp,,af$ixy!3
+	OPCDEF	DI ,	,$F3,		PREFIX=.8080!.Z80
+	OPCDEF	DJN,Z	,$10,FG.REL
+	OPCDEF	EI ,	,$FB,		PREFIX=.8080!.Z80
+	OPCDEF	EX ,	,$E3
+			DST	am.hl,,af$ixy!3
+			SRC	,am$sp
+	OPCDEF	EX ,	,$E3
+			DST	,am$sp,3
+			SRC	am.hl,,af$ixy
+	OPCDEF	EX ,	,$EB
+			DST	am.de,,3
+			SRC	am.hl
+	OPCDEF	EX ,	,$EB
+			DST	am.hl,,3
+			SRC	am.de
+	OPCDEF	EXA,F	,$08
+	OPCDEF	EXX,	,$D9
+	OPCDEF	HAL,T	,$76
+	OPCDEF	HLT,	,$76,		PREFIX=.8080
+	OPCDEF	IM ,	,$46,FG.IMN,	PREFIX=PRE.ED
+	OPCDEF	IM0,	,$46,		PREFIX=PRE.ED
+	OPCDEF	IM1,	,$56,		PREFIX=PRE.ED
+	OPCDEF	IM2,	,$5E,		PREFIX=PRE.ED
+	OPCDEF	IN ,	,$40,		PREFIX=PRE.ED
+			DST	am.rrr,,3
+			SRC	,am$c
+	OPCDEF	IN ,	,$40,		PREFIX=PRE.ED
+			DST	am.a,,3
+			SRC	,am$8
+	OPCDEF	IN ,	,$DB,		PREFIX=.8080
+			SRC	am.8		; byte is port number
+	OPCDEF	INC,	,$04
+			DST	am.rrr,am$hl,af$ixy!3
+	OPCDEF	INC,	,$03
+			DST	am.bc!am.de!am.hl!am.sp,,af$ixy!3
+	OPCDEF	IND,	,$AA,		PREFIX=PRE.ED
+	OPCDEF	IND,R	,$BA,		PREFIX=PRE.ED
+	OPCDEF	INI,	,$A2,		PREFIX=PRE.ED
+	OPCDEF	INI,R	,$B2,		PREFIX=PRE.ED
+	OPCDEF	INR,	,$04,		PREFIX=.8080
+			DST	am.7!am.m,,3
+	OPCDEF	INX,	,$03,		PREFIX=.8080
+			DST	am.rr!am.h!am.sp,,3
+	OPCDEF	JC ,	,$DA,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	JM ,	,$FA,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	JMP,	,$C3,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	JNC,	,$D2,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	JNZ,	,$C2,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	JP ,	,$C2,FG.CCC
+			SRC	am.adr
+	OPCDEF	JP ,	,$C3
+			SRC	am.adr
+	OPCDEF	JP ,	,$E9
+			SRC	,am$hl,af$ixy!af$nop
+	OPCDEF	JP ,	,$F2,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	JPE,	,$EA,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	JPO,	,$E2,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	JR ,	,$20,FG.C.Z!FG.REL
+	OPCDEF	JR ,	,$18,FG.REL
+	OPCDEF	JZ ,	,$CA,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	LD ,	,$40
+			DST	am.7,am$hl,af$ixy!3
+			SRC	am.7!am.8,am$hl,af$ixy
+; make sure LD (HL),(HL) is illegal (prefixed versions too)
+	OPCDEF	LD ,	,$01
+			DST	am.bc!am.de!am.hl!am.sp,,3
+			SRC	am.16,,af$nop
+	OPCDEF	LD ,	,$02
+			DST	,am$bc!am$de,af$nop
+			SRC	am.a,,af$nop
+	OPCDEF	LD ,	,$22
+			DST	,am$16,af$nop
+			SRC	am.hl,,af$nop
+	OPCDEF	LD ,	,$32
+			DST	,am$16,af$nop
+			SRC	am.a,,af$nop
+	OPCDEF	LD ,	,$0A
+			DST	am.a,,af$nop
+			SRC	,am$bc!am$de,af$nop
+	OPCDEF	LD ,	,$2A
+			DST	am.hl,,af$nop
+			SRC	,am$16,af$nop
+	OPCDEF	LD ,	,$3A
+			DST	am.a,,af$nop
+			SRC	,am$16,af$nop
+	OPCDEF	LDA,	,$3A,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	LDA,X	,$0A,		PREFIX=.8080
+			SRC	am.rr
+	OPCDEF	LDD,	,$A8,		PREFIX=PRE.ED
+	OPCDEF	LDD,R	,$B8,		PREFIX=PRE.ED
+	OPCDEF	LDI,	,$A0,		PREFIX=PRE.ED
+	OPCDEF	LDI,R	,$B0,		PREFIX=PRE.ED
+	OPCDEF	LHL,D	,$2A,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	LXI,	,$01,		PREFIX=.8080
+			DST	am.rr!am.h!am.sp,,3
+			SRC	am.16
+	OPCDEF	MOV,	,$40,		PREFIX=.8080
+			DST	am.7!am.m,,3
+			SRC	am.7!am.m
+; make sure MOV M,M is disallowed
+	OPCDEF	MVI,	,$06,		PREFIX=.8080
+			DST	am.7!am.m,,3
+			SRC	am.8,,af$nop
+	OPCDEF	NEG,	,$44,		PREFIX=PRE.ED
+	OPCDEF	NOP,	,$00,		PREFIX=.8080!.Z80
+	OPCDEF	OR ,	,$B0
+			SRC	am.7!am.8,am$hl,af$ixy
+	OPCDEF	ORA,	,$B0,		PREFIX=.8080
+			SRC	am.7!am.m
+	OPCDEF	ORI,	,$F6,		PREFIX=.8080
+			SRC	am.8,,af$nop
+	OPCDEF	OTD,R	,$BB,		PREFIX=PRE.ED
+	OPCDEF	OTI,R	,$B3,		PREFIX=PRE.ED
+	OPCDEF	OUT,	,$41,		PREFIX=PRE.ED
+			DST	,am$c,3
+			SRC	am.rrr
+	OPCDEF	OUT,	,$41,		PREFIX=PRE.ED
+			DST	,am$8,3
+			SRC	am.a
+	OPCDEF	OUT,	,$D3,		PREFIX=.8080
+			SRC	am.8		; byte is port number
+	OPCDEF	OUT,D	,$AB,		PREFIX=PRE.ED
+	OPCDEF	OUT,I	,$A3,		PREFIX=PRE.ED
+	OPCDEF	PCH,L	,$E9,		PREFIX=.8080
+	OPCDEF	POP,	,$C1
+			DST	am.bc!am.de!am.hl!am.af,,af$ixy!3
+	OPCDEF	POP,	,$C1,		PREFIX=.8080
+			DST	am.rr!am.h!am.psw,,3
+	OPCDEF	PUS,H	,$C5
+			SRC	am.bc!am.de!am.hl!am.af,,af$ixy
+	OPCDEF	PUS,H	,$C5,		PREFIX=.8080
+			SRC	am.rr!am.h!am.psw
+	OPCDEF	RAL,	,$17,		PREFIX=.8080
+	OPCDEF	RAR,	,$1F,		PREFIX=.8080
+	OPCDEF	RC ,	,$D8,		PREFIX=.8080
+	OPCDEF	RES,	,$80,		PREFIX=PRE.BT
+			SRC	am.7,am$hl,af$ixy
+	OPCDEF	RET,	,$C0,FG.CCC
+	OPCDEF	RET,	,$C9,		PREFIX=.8080!.Z80
+	OPCDEF	RET,I	,$4D,		PREFIX=PRE.ED
+	OPCDEF	RET,N	,$45,		PREFIX=PRE.ED
+	OPCDEF	RIM,	,$20,		PREFIX=.8080
+	OPCDEF	RL ,	,$10,		PREFIX=PRE.CB
+			DST	am.7,am$hl,af$ixy!3
+	OPCDEF	RLA,	,$17
+	OPCDEF	RLC,	,$00,		PREFIX=PRE.CB
+			DST	am.7,am$hl,af$ixy!3
+	OPCDEF	RLC,	,$07,		PREFIX=.8080
+	OPCDEF	RLC,A	,$07
+	OPCDEF	RLD,	,$6F,		PREFIX=PRE.ED
+	OPCDEF	RM ,	,$F8,		PREFIX=.8080
+	OPCDEF	RNC,	,$D0,		PREFIX=.8080
+	OPCDEF	RNZ,	,$C0,		PREFIX=.8080
+	OPCDEF	RP ,	,$F0,		PREFIX=.8080
+	OPCDEF	RPE,	,$E8,		PREFIX=.8080
+	OPCDEF	RPO,	,$E0,		PREFIX=.8080
+	OPCDEF	RR ,	,$18,		PREFIX=PRE.CB
+			DST	am.7,am$hl,af$ixy!3
+	OPCDEF	RRA,	,$1F
+	OPCDEF	RRC,	,$08,		PREFIX=PRE.CB
+			DST	am.7,am$hl,af$ixy!3
+	OPCDEF	RRC,	,$0F,		PREFIX=.8080
+	OPCDEF	RRC,A	,$0F
+	OPCDEF	RRD,	,$67,		PREFIX=PRE.ED
+	OPCDEF	RST,	,$C7,FG.RST		; restart vector ored in. RANGE
+	OPCDEF	RST,	,$C7,FG.RST	PREFIX=.8080	; RST0:7> goes in 3:5
+	OPCDEF	RZ ,	,$C8,		PREFIX=.8080
+	OPCDEF	SBB,	,$98,		PREFIX=.8080
+			SRC	am.7!am.m
+	OPCDEF	SBC,	,$98
+			DST	am.a,,af$nop
+			SRC	am.7!am.8,am$hl,af$ixy
+	OPCDEF	SBC,	,$42,		PREFIX=PRE.ED
+			DST	am.hl,,af$nop
+			SRC	am.bc!am.de!am.sp!am.hl
+	OPCDEF	SBI,	,$DE,		PREFIX=.8080
+			SRC	am.8,,af$nop
+	OPCDEF	SCF,	,$37
+	OPCDEF	SET,	,$C0,		PREFIX=PRE.BT
+			SRC	am.7,am$hl,af$ixy
+	OPCDEF	SHL,D	,$22,		PREFIX=.8080
+			SRC	am.adr
+	OPCDEF	SIM,	,$30,		PREFIX=.8080
+	OPCDEF	SLA,	,$20,		PREFIX=PRE.CB
+			DST	am.7,am$hl,af$ixy!3
+	OPCDEF	SPH,L	,$F9,		PREFIX=.8080
+	OPCDEF	SRA,	,$28,		PREFIX=PRE.CB
+			DST	am.7,am$hl,af$ixy!3
+	OPCDEF	SRL,	,$38,		PREFIX=PRE.CB
+			DST	am.7,am$hl,af$ixy!3
+	OPCDEF	STA,	,$32,		PREFIX=.8080
+			DST	am.adr,,3
+	OPCDEF	STA,X	,$02,		PREFIX=.8080
+			DST	am.rr,,3
+	OPCDEF	STC,	,$37,		PREFIX=.8080
+	OPCDEF	SUB,	,$90
+			SRC	am.7!am.8,am$hl,af$ixy
+	OPCDEF	SUB,	,$90,		PREFIX=.8080
+			SRC	am.7!am.m
+	OPCDEF	SUI,	,$D6,		PREFIX=.8080
+			SRC	am.8,,af$nop
+	OPCDEF	XCH,G	,$EB,		PREFIX=.8080
+	OPCDEF	XOR,	,$A8
+			SRC	am.7!am.8,am$hl,af$ixy
+	OPCDEF	XRA,	,$A8,		PREFIX=.8080
+			SRC	am.7!am.m
+	OPCDEF	XRI,	,$EE,		PREFIX=.8080
+			SRC	am.8,,af$nop
+	OPCDEF	XTH,L	,$E3,		PREFIX=.8080
+	OPCDEF	999,999	,0		; flush the accumulated buffer
+PSTTOP:				;TOP LIMIT
+
+	.SBTTL	DIRECTIVES
+	.PSECT	DIR
+
+DIRBAS:				;BASE
+	DIRDEF	<ASCII>,	DFLGBM
+	DIRDEF	<ASCIN>,	DFLGBM
+	DIRDEF	<ASCIZ>,	DFLGBM
+ASCTSY:
+	DIRDEF	<ASECT>,	,	XREL
+	DIRDEF	<BLKB >
+	DIRDEF	<BLKW >,	DFLGEV
+	DIRDEF	<BSECT>,	,	XREL
+BYTSYM:	DIRDEF	<BYTE >,	DFLGBM
+	DIRDEF	<CKSUM>,	DFLGBM
+	DIRDEF	<COPY >
+	DIRDEF	<CROSS>
+	DIRDEF	<CSECT>,	,	XREL
+	DIRDEF	<DCREF>
+	DIRDEF	<DEFST>
+	.IF DF	YPHASE
+	DIRDEF	<DEPHA>
+	.ENDC
+	DIRDEF	<DSABL>
+	DIRDEF	<ECREF>
+	DIRDEF	<ENABL>
+	DIRDEF	<END  >,DFLCND!DFLMAC!DFLEND
+	DIRDEF	<ENDC >,	DFLCND
+	DIRDEF	<ENDM >,	DFLMAC,	XMACRO
+	DIRDEF	<ENDR >,	DFLMAC,	XMACRO
+	DIRDEF	<ERROR>
+	DIRDEF	<EVEN >
+	DIRDEF	<GETPO>
+	DIRDEF	<GLOBL>,	,	XREL
+	DIRDEF	<IDENT>
+	DIRDEF	<IF   >,	DFLCND
+	DIRDEF	<IFDF >,	DFLCND
+	DIRDEF	<IFEQ >,	DFLCND
+	DIRDEF	<IFF  >,	DFLCND
+	DIRDEF	<IFG  >,	DFLCND
+	DIRDEF	<IFGE >,	DFLCND
+	DIRDEF	<IFGT >,	DFLCND
+	DIRDEF	<IFL  >,	DFLCND
+	DIRDEF	<IFLE >,	DFLCND
+	DIRDEF	<IFLT >,	DFLCND
+	DIRDEF	<IFNDF>,	DFLCND
+	DIRDEF	<IFNE >,	DFLCND
+	DIRDEF	<IFNZ >,	DFLCND
+	DIRDEF	<IFT  >,	DFLCND
+	DIRDEF	<IFTF >,	DFLCND
+	DIRDEF	<IFZ  >,	DFLCND
+	DIRDEF	<IIF  >
+	DIRDEF	<INCLU>
+	DIRDEF	<IRP  >,	DFLMAC,	XMACRO
+	DIRDEF	<IRPC >,	DFLMAC,	XMACRO
+	DIRDEF	<LIMIT>,	DFLGEV,	XREL
+	DIRDEF	<LIST >
+	DIRDEF	<MACLI>
+	DIRDEF	<MACR >,	DFLMAC, XMACRO
+	DIRDEF	<MACRO>,	DFLMAC,	XMACRO
+	DIRDEF	<MCALL>,	DFLSMC,	XSML
+	DIRDEF	<MEXIT>	,	,	XMACRO
+	DIRDEF	<MPURG>,	,	XMACRO
+	DIRDEF	<NARG >	,	,	XMACRO
+	DIRDEF	<NCHR >	,	,	XMACRO
+	DIRDEF	<NLIST>
+	DIRDEF	<NOCRO>
+	DIRDEF	<ODD  >
+	DIRDEF	<PAGE >
+	.IF DF	YPHASE
+	DIRDEF	<PHASE>
+	.ENDC
+	DIRDEF	<POP  >
+	DIRDEF	<PRINT>
+	DIRDEF	<PSECT>
+	DIRDEF	<PUSH >
+	DIRDEF	<PUTPO>
+	DIRDEF	<RADIX>
+	DIRDEF	<RAD50>,	DFLGEV
+	DIRDEF	<REPT >,	DFLMAC,	XMACRO
+	DIRDEF	<REXIT>	,	,	XMACRO
+	DIRDEF	<SBTTL>
+	DIRDEF	<SYMBO>
+	DIRDEF	<TITLE>
+	DIRDEF	<VCTRS>
+	DIRDEF	<WARN >
+WRDSYM:
+	DIRDEF	<WORD >,	DFLGEV
+
+DIRTOP:				;TOP LIMIT
+	.END

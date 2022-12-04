@@ -1,0 +1,723 @@
+	.TITLE	OPCZ80	Z80 OP CODE PROCESSOR
+	.ENABL LC
+
+	.PSECT OPCZ80
+
+	.MACRO GENCAL NAME
+	.MACRO NAME
+	CALL	NAME
+	.ENDM NAME
+	.ENDM GENCAL
+
+	GENCAL STCODE
+	GENCAL SETIMM
+	GENCAL SETDSP
+	GENCAL SAVREG
+	GENCAL GETSYM
+	GENCAL SETSYM
+	GENCAL TSTARG
+	GENCAL GLBEXP
+	GENCAL ABSEXP
+	GENCAL RELEXP
+	GENCAL GETNB
+	GENCAL SETNB
+	GENCAL ZAPCPX
+
+REGFLG	=001			;REGISTER TYPE
+DEFFLG	=010			;DEFINED
+RELFLG	=040			;RELOCATABLE
+GLBFLG	=100			;GLOBAL
+CPXFLG	=200			;COMPLEX EXPRESSION FLAG
+PS1FLG	=200			;UNDEFINED
+
+desflg = 100000				; destructive to operand (for CREF)
+
+rs.pst = 8.				; in words, and MUST BE ACCURATE.
+
+.macro	ROLCAL	oper
+	.macro	oper	roll
+		mov	#roll,r0
+		.globl	oper
+		.globl	roll
+		call	oper
+		.endm	oper
+	.endm	rolcal
+
+	rolcal	search
+	rolcal	same
+
+	.MACRO	XOR	S,D
+	MOV	S,-(6)
+	BIC	D,(6)
+	BIC	S,D
+	BIS	(6)+,D
+	.ENDM	XOR
+
+	.MACRO	PUSH ARG
+	MOV	ARG,-(SP)
+	.ENDM
+
+	.MACRO	PULL ARG
+	MOV	(SP)+,ARG
+	.ENDM
+
+.macro	BLKCTX
+	.BLKW	rs.pst+1
+	.endm	blkctx
+
+.macro	SAVCTX	addr
+	mov	r0,-(sp)
+	mov	r1,-(sp)
+	mov	#addr,r1
+	mov	#symbol,r0
+	mov	chrpnt,(r1)+
+	.rept	rs.pst
+	mov	(r0)+,(r1)+
+	.endr
+	mov	(sp)+,r1
+	mov	(sp)+,r0
+	.endm	savctx
+
+.macro	GETCTX	addr
+	mov	r0,-(sp)
+	mov	r1,-(sp)
+	mov	#addr,r1
+	mov	#symbol,r0
+	mov	(r1)+,chrpnt
+	.rept	rs.pst
+	mov	(r1)+,(r0)+
+	.endr
+	mov	(sp)+,r1
+	mov	(sp)+,r0
+	zapcpx
+	clr	argpnt		; restart having not seen the next character
+	setnb			; but make it available
+	.endm	getctx
+
+.macro	ZAPCTX, addr		; clear the record and argpnt
+	mov	r0,-(sp)
+	.if b	addr
+	clr	argpnt
+	mov	#symbol,r0
+	.iff
+	mov	#addr,r0
+	clr	(r0)+
+	.endc
+	.rept	rs.pst
+	clr	(r0)+
+	.endr
+	mov	(sp)+,r0
+	zapcpx
+	.endr
+
+.macro	.TSECT	name, a1, a2, a3, a4, a5, a6, a7
+	.save
+	.psect name a1 a2 a3 a4 a5 a6 a7
+	.endm	.tsect
+
+.macro	.ESECT
+	.restore
+	.endm	.esect
+
+.macro	SUCEED			; (in parsing an argument)
+	clz			; success is bne, cuz non-zero is true
+	return
+	.endm	suceed
+
+.macro	FAIL			; (in parsing an argument)
+	sez			; failure is beq, cuz zero is false
+	return
+	.endm	fail
+
+.macro	CRFON			; restore cref to user value
+	mov	edsave,edmask	; (from the stash)
+	.endm	crfon
+
+.macro	CRFOFF			; turn cref off unconditionally
+	bis	#ed.crf,edmask
+	.endm	crfoff
+
+.MACRO	ERROR CHR text
+	BIS	#ERR.'CHR,ERRBTS
+;	say2	<ERR=CHR	text>
+	.ENDM
+
+ERRI=1
+	.IRPC	X,< ABDEILMNOPQRTUZ>
+ERR.'X=ERRI
+ERRI=ERRI+ERRI
+	.ENDR
+
+	xdigit			; define hex constants
+
+	.SBTTL	Local storage
+
+; following is a storage area for the PST record at entry time
+
+;;; start of PSTROL prototype, the next 8. words must be left alone
+	opcctx:	.blkw	1	; chrpnt is stored here (but is never restored)
+	opcnam:	.blkw	2	; for symbol name (opcode mnemonic)
+		; following is a work area for "this" opcode
+	opcval:	.blkb	1	; opcode value
+	opcpfx:	.blkb	1	; "CLASS BYTE" - prefix index, 200(8) bias
+	opcflg:	.blkw	1	; flags that are not operand dependent
+	opcdst: .blkw	2	; destination address mode
+	opcsrc:	.blkw	2	; source address mode
+;;; end of PSTROL prototype
+;;; start of DST and SRC address mode prototype; 2 words
+	DSTSRC:			; prototype name
+	arg.AM:	.blkw	1	; address modes for direct access (no paren)
+	arg$am:	.blkb	1	; address modes for indirect access (parens)
+	arg$af:	.blkb	1	; modifiers for both modes
+;;; end of DSTSRC address mode prototype
+
+opcmap:	.blkw	1		; generic operand address mode
+opcrtn:	.blkw	1		; generic operand special processing routine
+
+savpnt:	.blkw	1		; real stash for chrpnt (at entry)
+errctx:	.blkw	1		; storage for entry-time errors
+namctx:	.blkw	2		; opcode mnemonic from preceding opcode
+
+; assorted context storage areas
+savexp:	blkctx		; temporary in case we need a global
+savddd:	blkctx		; for index offsets (absolute byte)
+savgbl:	blkctx		; also used for relative (byte) offsets
+outctx:	blkctx		; context AFTER parse, to avoid Q errors
+
+; flag and count (dirty) storage
+edsave:	.blkw	1		; stash for enable/disable mask
+basval:	.blkb	1		; base opcode value (for later cheating ref)
+seenHL:	.blkb	1		; zero means no HL seen		(only one of
+seenIX:	.blkb	1		; zero means no IX seen		  these 3 bytes
+seenIY:	.blkb	1		; zero means no IY seen		    should <>0)
+seenDD:	.blkb	1		; zero means no offset byte
+seenJR:	.blkb	1		; zero means no relative
+seenGB:	.blkb	1		; zero means no immediate value (GBL value)
+GBmode:	.blkb	1		; zero means word mode for the immediate value
+bytcnt:	.blkb	1		; number of bytes output so far
+IXorIY:	.blkb	1		; prefix indicating index register (or null)
+CBorED:	.blkb	1		; prefix indicating opcode escape (or null)
+
+	.even
+
+	.tsect	bpure,rel,con		; pure data storage, byte aligned
+	.psect	wpure,rel,con		; pure data storage, word aligned
+	.esect
+
+	.SBTTL	Process Opcode
+
+OPCODE::
+	MOV	#77776,PCRCNT	;LIST LOCATION OF FIRST BYTE ONLY
+	mov	(sp)+,flags	;save opcode value and flag byte, backwards
+	mov	edmask,edsave	;stash option state for future restore
+	mov	errbts,errctx	; for later restore
+	clrb	bytcnt		; no code output yet
+	mov	chrpnt,savpnt	; set up for parse restore
+	
+10$:	mov	savpnt,chrpnt	; restore parse to entry conditions
+	clr	argpnt		; establish that r5 will hold the ...
+	setnb			; 	... "next character"
+	mov	errctx,errbts	; and no errors yet
+
+	savctx	opcctx		; to make our names handy
+	mov	opcnam,namctx	; stash for later compare
+	mov	opcnam+2,namctx+2 ; this one will increment.
+	movb	opcval,basval	; for later cheating reference
+
+	call	opchek		;see if this is the proper case
+	bne	60$		;yes, finish up
+	same	pstrol		; pick up the next record (if approp)
+	bne	10$		; twerked.  Use it.
+
+50$:	error	a	<There wasn't an appropriate address mode>
+60$:	movb	seenhl,r0	; count HL, IX & IY ref's
+	movb	seenix,r1	; also test for & handle prefixes
+	beq	65$		; no IX, so no prefix
+	movb	#$DD,ixoriy	; use this as a prefix
+	add	r1,r0		; keep counting
+65$:	movb	seeniy,r1	; fetch next one
+	beq	70$		; none seen
+	movb	#$FD,ixoriy	; say we saw it
+	add	r1,r0		; and count it
+70$:	cmpb	r0,#1		; too many?
+	blos	80$		; no, so do the regular thing
+	error	R <Can't combine @HL variants>
+80$:	call	outcod		;output whatever we have
+	crfon			; restore mask to user state
+cpopj::				; a do-nothing routine for switch handling
+	return			; and that's it!
+
+	.SBTTL	Check a case of opcode
+
+opchek:				;now we check the argument list
+				; to see if the arguments are allowed
+	zapctx	savddd		; assume we will want to use this space
+	zapctx	savgbl		; and this one
+	zapctx			; but assume nothing
+	zapcpx			; ... at all ...
+	clr	expflg		; no commas yet
+	clr	argpnt		; no characters examined
+	clr	argcnt		; and no operands used (yet)
+	clrb	seenhl
+	clrb	seenix		;
+	clrb	seeniy		;
+	clrb	seendd		;
+	clrb	seenjr		;
+	clrb	seengb		; no immediate value seen
+	clrb	gbmode		; assume word
+	clrb	ixoriy		; CBorED is unconditionally set in SPECOP
+
+	call	specop		; see if this opcode has an operand modifier
+	beq	99$		; modifier expected and not present/recognized
+
+	bit	#ed.s2d,edmask	; is this backwards, or standard?
+	beq	30$		; backwards;  do the other way
+				; (bit clear means ENABLED)
+
+	call	dest		; check this out
+	beq	99$		; failed.
+	call	source		; try for source reg
+	return			; Whether it worked or not, pass it back
+
+30$:	call	source		; try for source reg
+	beq	99$		; failed.
+	call	dest		; check this out
+	
+99$:	return			; send back whatever status we got
+
+	.SBTTL	Special (constant) Operands
+
+.if ne, 0
+;+
+    Here we check for (in order):
+	PRE.ED		(ED prefix byte required)
+	PRE.CB		(bit twiddling type, no bit number callout)
+	PRE.BT		(bit twiddling with bit number callout)
+	FG.C.Z		(conditionals for carry and zero)
+	FG.CC		(other conditionals)
+	FG.IMN		(mode number)
+	FG.REL		(relative branch targets)
+	FG.RST		(restart address)
+
+    We also que up for prefix codes ED and CB; the FD and DD prefixes are
+set up when we see the IX or IY register used.
+;-
+.endc
+
+
+	.tsect	bpure
+pfx.xx:	.byte	$00, $CB, $CB, $ED	; prefix table in order of PRE.* values
+imn.xx:	.byte	$46, $56, $5E, $5E	; table for IM N values (new opcodes)
+	.psect	wpure
+CCCtxt:	.IRP X,<NZ,Z,NC,C,PO,PE,P,M>
+	.RAD50 /X/
+	.endr
+CCCend:
+	.esect
+
+
+    .enabl lsb
+specop:	movb	opcpfx,r0	; get a copy of the prefix indicator
+	bic	#^Cpre.xx,r0	; and just the prefix byte
+	movb	pfx.xx(r0),cbored	; copy the hard coded prefix
+
+200$:	cmpb	r0,#pre.bt	; is there a bit number callout?
+	bne	300$		; no--step 3
+	tstarg			; there should be one
+	bne	210$		; ok, fine
+	error	Q <Bit number missing>
+	fail
+210$:	absexp			; evaluate the expression
+	zapcpx			; but forget the formula
+	bitb	#regflg!relflg!glbflg!cpxflg,mode	; needs to be assy abs.
+	beq	220$		; branch if it is
+	error	A <Bit number not assembly-time absolute>
+220$:	mov	value,r0	; legal if 0-7, or into opcode shifted 3
+	cmp	r0,#7		; is it legal?
+	blos	2903$		; yes, don't barf
+	error	A <Invalid bit number>
+	bic	#-8.,r0		; fake it
+2903$:	jmp	903$		; shift 3 then or into opcval, and suceed
+
+300$:	mov	opcflg,r0	; get a copy of the flags word
+	bit	#FG.C.Z,r0	; is there C or Z conditions required?
+	beq	500$		; no--step 5 (never others without C&Z)
+	tstarg			; see if there is anything (CCC is required)
+	beq	393$		; no argument, didn't work
+	zapctx			; start with no symbol
+	getsym			; get the next symbol
+	beq	393$		; no symbol?  no good.
+	tst	symbol+2	; was it longer than 3 chars?
+	bne	393$		; yes, nfg.
+	mov	#<cccend-ccctxt>,r1 ; get length of table
+	bit	#FG.CC,r0	; are other conditionals legal?
+	bne	315$		; yes, use entire table
+	asr	r1		; only the first half of the table counts
+315$:	bicb	#1,r1		; ensure even address no matter what
+	mov	r1,r0		; set up so our index will be in the right reg
+	mov	symbol,r1	; get the name of the condition
+320$:	cmp	r1,ccctxt(r0)	; is this it?
+	beq	330$		; yes, continue with this value
+	dec	r0		; make it even
+	sob	r0,320$		; look at preceding one, or die
+393$:	error	A <Unrecognized condition>
+	incb	expflg		; commas expected anyway
+	fail
+330$:	call	902$		; use the index shifted 2 (already shifted one)
+	br	600$		; next check for a relative address
+
+500$:	bit	#FG.IMN,r0	; immediate mode switch?
+	beq	600$		; no--step 6
+	tstarg			; there should be one
+	bne	510$		; ok, fine
+	error	Q <Mode number missing>
+	fail
+510$:	absexp			; evaluate the expression
+	zapcpx			; but forget the formula
+	bitb	#regflg!relflg!glbflg!cpxflg,mode	; needs to be assy abs.
+	beq	520$		; branch if it is
+	error	A <Mode number not assembly-time absolute>
+520$:	mov	value,r0	; legal if 0-2, or into opcode shifted 3
+	cmp	r0,#2		; maximum legal value
+	blos	530$		; ok, fine
+	error	A <Invalid mode>
+	bic	#-4,r0		; clear all the illegal bits
+530$:	movb	imn.xx(r0),opcval	; new opcode value
+	suceed			; otherwise done (no other arguments for IM N)
+
+600$:	bit	#FG.REL,r0	; relative branch target?
+	beq	700$		; no--step 7
+	savctx	savgbl		; save the data for later output
+		; we can use savgbl since rel and gbl never occur together
+	relexp			; and eat the expression
+	zapcpx			; but don't take up un-needed memory
+	incb	seenJR		; relative address seen
+	incb	expflg		; commas from now on (if anything is left)
+	suceed
+
+700$:	bit	#FG.RST,r0	; restart vector?
+	beq	900$		; no--finish up
+	tstarg			; there is supposed to be one
+	bne	710$		; yes, fine
+	error	A <No vector to restart with?>
+	fail			; opcode is base value (RST 0)
+710$:	absexp			; fetch the expression
+	zapcpx			; but forget about the formula
+	incb	expflg		; commas from now on (in case we fail)
+	bitb	#regflg!relflg!glbflg!cpxflg,mode ; was it wierd?
+	beq	720$		; nope, skip the error
+	error	A <Restart vector not assembly-time absolute>
+	fail			; opcode is base value, RST 0
+720$:	mov	value,r0	; what's it worth?
+	clc			; start knowing which bits are set
+	bit	#ED.Z80,edmask	; is this Z80 or 8080?
+	bne	730$		; Z80--vector is already shifted
+	rol	r0		; shove over the value
+	rol	r0		;   so it is where the opcode
+	rol	r0		;     (and address bus) need it
+730$:	bcs	740$		; if carry set, we rotated it out
+	bit	#^C70,r0	; are any illegal bits set?
+	beq	900$		; no bad bits, no error (done, too!)
+740$:	error	A <Invalid restart vector>
+	fail			; expflg already set, OPCVAL too  (RST 0)
+
+903$:	asl	r0		; move the bit number
+902$:	asl	r0		;   into the right place
+	asl	r0		;     for combining it
+900$:	bisb	r0,opcval	; and or it into the opcode
+	incb	expflg		; commas from now on
+	suceed			; and go on home
+    .dsabl lsb
+
+	.SBTTL	Check Dest and (or?) Source operands
+
+    .enabl lsb
+dest:	mov	#opcdst,r0	; use destination address modes
+	call	oprand		; continue with processing the operand
+	br	10$		; now pick up with "should we have changed it"
+
+source:	mov	#opcsrc,r0	; use source address modes
+	call	oprand		; figure out the operand and it's value
+10$:	bne	20$		; save the status
+	clr	r0		; for a later TST
+	br	30$		; now continue
+20$:	movb	#1,r0		; so TST creates NE
+30$:	bitb	#af$nop,arg$af	; were we supposed to modify the opcode value?
+	beq	40$
+	movb	basval,opcval	; restore the going-in value
+40$:	tst	r0		; restore the Z flag
+	return			; and go on home
+    .dsabl lsb
+
+
+oprand:	mov	(r0)+,arg.am	; copy flags into prototype
+	movb	(r0)+,arg$am	; keep copying
+	movb	(r0),arg$af	; till done
+
+	bic	#desflg,crfdfl	; assume this is a non-destructive reference
+	bitb	#af$des,arg$af	; is this true?
+	beq	10$		; yes, so leave it that way
+	bis	#desflg,crfdfl	; no, so fix it back the way it was
+
+10$:	tst	arg.am		; should there be an argument?
+	bne	50$		; yes, go use it
+	tstb	arg$am		; how about deferred?
+	bne	50$		; yes, so there must be something
+	suceed			; guess that's all we can do
+
+50$:	movb	opcval,basval	; in case we need to restore it later
+	tstarg			; is there an exp?
+	bne	60$		; got one.  Goody.  Go use it.
+	error	a	<Expression required and not present>
+	fail
+
+60$:	incb	expflg		; commas expected after the first operand
+	cmpb	#'(,r5		; is it indirect?
+	bne	70$		; no, do the standard thing
+	jmp	defer		; yes, different parse rules
+70$:	savctx	savexp		; keep it for coming back here
+	zapctx			; start with nothing
+	glbexp			; what is the expression?
+	zapcpx			; we don't care about the formula
+	bitb	#regflg,mode	; did he specify a register?
+	beq	nonreg		; no, this operand is immediate value
+75$:	cmpb	#regflg!defflg,mode	; this is the only real register type
+	beq	regexp		; it is really a register (absolutely)
+	error	r	<Relocatable register in OPRAND>
+	fail
+
+	.SBTTL	REGISTER operand
+
+
+    .enabl lsb
+regexp:				; made it thru reg/nonreg test--register
+	mov	arg.am,r1	; which registers are legal?
+	bic	#7,r1		; (only register flags count)
+	mov	value,r0	; fetch what he specified
+	bit	r1,r0		; did he specify one that was legal?
+	bne	10$		; yes, continue
+	error	R <Illegal register specified>
+	fail
+
+10$:	bic	#^C7,r0		; get the opcode value of the register
+	bit	#am.ixy,value	; was this register IX or IY?
+	beq	15$		; no, keep going as is (mainline)
+	bic	#^C1,r0		; extract which register it was
+	incb	seenix(r0)	; indicate we saw what we saw
+	movb	#4,r0		; and use HL's value
+	br	18$		; and pick up with shifting
+15$:	bit	#am.hl,value	; was this HL register?
+	beq	18$		; no, so don't indicate that it was
+	incb	seenhl		; yes, so say we saw it
+18$:	movb	arg$af,r1	; get the shift count too
+	bic	#^C3,r1		; and just the shift count
+	bne	30$		; no shifting to be done
+20$:	asl	r0		; shift one position
+	sob	r1,20$		; ... at a time
+30$:	bis	r0,opcval	; now modify the opcode
+	suceed			; and that's all!
+or.reg:	bic	#-8.,r0		; register is always 3 bits
+	br	18$		; continue with common code
+    .dsabl lsb
+
+	.SBTTL	NON REGISTER operand
+
+nonreg:				; made it thru reg/nonreg test--non register
+				; (we already ate the expression)
+
+	bit	#am.8,arg.am	; was 8 bit value expected?
+	bne	10$		; yes, do the right thing
+	bit	#am.16,arg.am	; how about 16 bit value?
+	bne	20$		; yes, go fetch.
+	error	R <Non-register operand where register required>
+	fail
+10$:	incb	GBmode		; say that it is a byte
+20$:	incb	seengb		; say we have a value
+	getctx	savexp		; remember where this expression started
+	savctx	savgbl		; save the data for later output
+	glbexp			; and eat the expression (no Q errors)
+	zapcpx			; no stored operations
+	bit	#ed.z80,edmask	; should opcode be modified for immediate mode?
+	beq	97$		; no, 8080 has separate mnemonics
+	cmp	arg.am,#7	; any registers legal along with immediate?
+	blos	97$		; no, base opcode already modified
+	movb	opcval,r0	; we need to modify as a word
+	movb	#$46,r1		; what to toggle
+	xor	r1,r0		; flip the bits in r0
+	movb	r0,opcval	; now put the byte back
+97$:	suceed
+
+	.SBTTL	Deferred operand (indirect)
+
+defer:
+	getnb			; eat the open paren
+	savctx	savexp		; save this place for deferred address
+	bit	#am$8!am$16,arg$am	; are we expecting an expression?
+	bne	50$		; yes, go parse the 8 or 16 bit value
+	getsym			; get the next symbol
+	bne	5$		; got one, fine.
+	error	A <No argument where register expected>
+	fail
+5$:	incb	expflg		; commas from now on
+	search	symrol		; we have a symbol!
+	bne	6$		; and it means something.
+	error	U <Undefined register>
+	fail
+6$:	cmpb	#regflg!defflg,mode	; only legal combination
+	beq	10$		; it's legal, keep it.
+	error	R <Relocatable register in DEFER>		; forget it.
+	fail
+10$:	movb	arg$am,r0	; get legal modes out
+	swab	r0		; set them in the high byte
+	bic	#am.$,r0	; just keep registers in
+	bitb	#af$ixy,arg$af	; is IX or IY legal?
+	beq	20$		; no, leave it that way
+	bis	#am.ixy,r0	; yes, say so
+20$:	bit	r0,value	; is the value legal?
+	bne	30$		; yes, check for specials
+	error	R <Illegal register in DEFER>
+	fail
+30$:	bit	#am.ixy,value	; is it (IX or (IY ?
+	bne	40$		; yes, so do the special thing
+	bit	#am.hl,value	; is it special?
+	beq	35$		; no, use the value as is.  (branch error)
+	incb	seenHL		; say we saw it
+	movb	#6,r0		; this is an indirect memory ref
+35$:	jmp	80$		; and use the bits in r0
+40$:	mov	value,r0	; fetch which register it is
+	bic	#-2,r0		; and that's all
+	incb	seenIX(r0)	; say we saw it
+	cmpb	#351,basval	; is this "JP" opcode?	(only one operand)
+	beq	90$		; if so, next char is close paren
+	incb	seendd		; and account for index byte
+	movb	#6,r0		; indirect memory ref uses rrr=6
+	call	or.reg		; modify the opcode at the right place
+	setnb			; get next useful character
+	cmpb	#'+,r5		; how about a plus?
+	beq	45$		; yes, that's wonnerful
+	cmpb	#'-,r5		; is it a minus?
+	bne	93$		; no, but some sign is required for this syntax
+45$:	savctx	savddd		; stash start of byte expression (unary op too)
+	glbexp			; and eat whatever it is, errors and all
+	zapcpx			; but don't use precious memory
+	br	90$		; expect a close paren
+	
+50$:				; indirect address.
+	tstb	seenGB		; check if we have been here before
+	bne	93$		; yes.
+	incb	seenGB		; say we have now.
+	clrb	GBmode		; addresses are word mode
+	getctx	savexp		; go back to beginning of expression
+	savctx	savgbl		; stash it for output
+	glbexp			; eat the expression
+	zapcpx			; and swallow it (never to be seen again?)
+
+80$:	movb	value,r0	; get the register
+	bic	#-8.,r0		; mask all but low 3 bits
+85$:	call	or.reg		; set the bits for which register
+90$:	setnb			; make sure we have the next useful character
+	cmpb	#'),r5		; is it close paren?
+	beq	91$		; yes, eat it and we're done
+	error	q	<Missing close parenthesis>
+	fail			; die and go home
+
+91$:	getnb			; eat that close paren
+97$:	suceed			; and go home happy
+
+93$:	error	a	<Don't understand indirection>
+	fail
+
+	.SBTTL	Output code
+
+.macro	OUTCON	byte, nocheck, ?label
+	clr	value		; so that it is indeed a byte
+	movb	byte,value	; save the data to put out
+.iif b,<nocheck>,	beq	label
+	clr	flags		; make it absolute
+	incb	bytmod		; always output bytes
+	incb	bytcnt		; and count them
+	setimm			; non relative
+	stcode			; store the code
+label:
+	.endm	OUTCON
+
+
+outcod:	crfoff			; avoid double references
+	savctx	outctx		; save current context to allow for reparsing
+	clrb	bytcnt		; start with no bytes output yet
+	clrb	bytmod		; so that we don't incb thru zero
+	outcon	IXorIY		; output this prefix if non-zero
+	outcon	CBorED		; this one too
+	call	outddd		; see if we should output an index offset
+	outcon	opcval,nocheck	; spit out the final opcode (even if null)
+	call	outddd		; see if we should output an index offset
+	call	outrel		; output any relative expression (byte)
+	call	outgbl		; output any global expression
+	getctx	outctx		; return context to post-parse state
+	crfon			; set it back up
+	suceed			; and return
+
+	.SBTTL	Output index offset
+
+OUTDDD:
+	tstb	seendd		; is an offset byte appropriate?
+	beq	99$		; no, skip it
+
+	getctx	savddd		; get the value to output
+	glbexp			; reparse it
+
+	incb	bytmod		; make sure it is really a byte
+	setimm
+	stcode
+99$:	return
+
+	.SBTTL	Output relative address
+
+OUTREL:
+	tstb	seenJR		; was there a relative offset?
+	beq	99$		; no, don't output one
+
+	getctx	savgbl		; use the expression we saw
+	relexp			; re-parse it (no globals allowed)
+
+	bit	#-2.,rellvl	; make sure level is 0 or 1
+	bne	93$		; didn't make it, fake it
+	cmpb	sector,clcsec	; are we in the same sector?
+	bne	93$		; no, barf
+	mov	value,r0	; get the value of the expression
+	sub	clcloc,r0	; compute displacement
+	bvs	93$		; overflow-- nfg.
+	sub	#2.,r0		; compensate for actual location
+	bvs	93$		; more overflow?
+	mov	r0,value	; save offset for emitting code
+	bic	#127.,r0	; high byte must match high bit of lo byte
+	tst	r0		; positive?
+	beq	97$		; yes, use it
+	cmp	#-128.,r0	; negative (all bits set)?
+	beq	97$		; yes, use it
+93$:	mov	#-2.,value	; fake the value (branch to here)
+	error	a	<Branch target out of range>
+97$:	clrb	mode		; fake immediate
+	clr	rellvl		; no reference to PC
+
+	incb	bytmod		; make sure it is a byte
+	setimm			; really relative, but all that's taken care of
+	stcode
+99$:	return
+
+	.SBTTL	Output global expression
+
+OUTGBL:				; global expressions are immediate words or
+				; absolute addresses (word based)
+	tstb	seenGB		; was there one?
+	beq	99$		; no.  fergit it.
+
+	movb	GBmode,bytmod	; use the base of the global we saw
+
+	getctx	savgbl		; use the expression we saw
+	glbexp			; re-parse it
+	setimm
+	stcode
+99$:	return
+
+	.END
